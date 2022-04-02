@@ -6,14 +6,26 @@ classdef Matrix3D < double
         	if ~isa(valueIn,'double'); error('Incorrect input type'); end
             obj = obj@double(valueIn);
         end
-        function C = mtimes(A,B)
-            % A : (a x c x Z)
-            % B : (c x b x Z)
+        function Cout = mtimes(A,B)
+            % A : (a x c x z)
+            % B : (c x b x z)
+            [a,c1,z1]=size(A);
+            [c2,b,z2]=size(B);
+            if c1~=c2; error('c1~=c2'); end
+            if z1~=z2; error('Z1~=Z2'); end 
+            
             Ap = permute(A,[2,1,4,3]); % (c x a x 1 x Z)
             Bp = permute(B,[1,4,2,3]); % (c x 1 x b x Z)
             C = Ap .* Bp;              % (c x a x b x Z)
             C = sum(C,1);              % (1 x a x b x Z)
             C = permute(C,[2,3,4,1]);  % (a x b x Z)
+            Cout = Matrix3D(C);
+            
+            [aOut,bOut,zOut] = size(Cout);
+            if a~=aOut; error('a~=aOut'); end
+            if b~=bOut; error('b~=bOut'); end
+            if z1~=zOut; error('z1~=zOut'); end
+            
         end
         function B = transpose(A)
             B = permute(A,[2,1,3]);
