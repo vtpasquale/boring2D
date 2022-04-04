@@ -123,7 +123,6 @@ classdef Tri2D
             stressStrain = mu.* repmat(stressStrain0,[1,1,nTri]);
             obj.Ktau = obj.area.* (obj.B.'*stressStrain*obj.B);
         end
-        
         function obj = computeMassMatrix(obj)
             % Compute mass matrix
             nTri = size(obj.nodeIDs,1);
@@ -150,12 +149,17 @@ classdef Tri2D
             u_c0 = N*u_e;
             u_c = u_c0(:);
         end
-        function [DuUDx,DuUDy] = computeConvectionDerivative(obj,u,U)
-            % compute convection derivative at element center from global
-            % scalar values of u and U
+        function [DuUDx,DuUDy] = computeConvectionDerivative(obj,ui,Uj)
+            % Compute convection derivatives d(ui*Uj)/dx and d(ui*Uj)/dy at 
+            % element center from nodal values of ui and Ui
+            %
+            % Inputs
+            % u = [nNodes,1 double] velocities [u1;u2;...;unNodes]
+            % U = [nNodes,1 double] scalar [U1;U2;...;UnNodes]
+            
             nTri = size(obj.nodeIDs,1);
-            u_e = Matrix3D( permute( u(obj.nodeIDs.'),[1,3,2]) );
-            U_e = Matrix3D( permute( U(obj.nodeIDs.'),[1,3,2]) );
+            u_e = Matrix3D( permute( ui(obj.nodeIDs.'),[1,3,2]) );
+            U_e = Matrix3D( permute( Uj(obj.nodeIDs.'),[1,3,2]) );
             r = 1/3; s = 1/3;
             n = [1-r-s, r, s];
             N = Matrix3D(repmat(n,[1,1,nTri]));
@@ -175,49 +179,68 @@ classdef Tri2D
             DuUDx  = DuUDx0(:);
             DuUDy  = DuUDy0(:);
         end
-        function [divU1,divU2] = computeDivergence(obj,uIn,UIn)
-            % compute convection derivative at element center from global
-            % scalar values of u and U
+        function [div_uU1,div_uU2] = computeDivergenceUsingConvectionDerivatives(obj,u,U)
+            % Compute divergence of [u]*Ui at element center from nodal
+            % values of u and U - using convection derivatives 
+            % (this function should be used for testing only)
+            %
+            % Inputs
+            % u = [2*nNodes,1 double] velocities [u1;v1;u2;v2;...;unNodes;vnNodes]
+            % U = [2*nNodes,1 double] scalar [U1;V1;U2;V2;...;UnNodes;VnNodes]
+            u1 = u(1:2:end,1);
+            u2 = u(2:2:end,1);
+            U1 = U(1:2:end,1);
+            U2 = U(2:2:end,1);
+            [du1U1dx,~] = obj.computeConvectionDerivative(u1,U1);
+            [~,du2U1dy] = obj.computeConvectionDerivative(u2,U1);
+            [du1U2dx,~] = obj.computeConvectionDerivative(u1,U2);
+            [~,du2U2dy] = obj.computeConvectionDerivative(u2,U2);
+            div_uU1 = du1U1dx + du2U1dy;
+            div_uU2 = du1U2dx + du2U2dy;
+        end
+        function [div_uU1,div_uU2] = computeDivergence(obj,u,U)
+            % Compute divergence of [u]*Ui at element center from nodal values of u and U
+            %
+            % Inputs
+            % u = [2*nNodes,1 double] velocities [u1;v1;u2;v2;...;unNodes;vnNodes]
+            % U = [2*nNodes,1 double] scalar [U1;V1;U2;V2;...;UnNodes;VnNodes]
             nTri = size(obj.nodeIDs,1);
             
-            % Convert to global coordinates
-            nG = 2*size(uIn,1);
-            u = zeros(nG,1);
-            u(1:2:end) = uIn(:,1);
-            u(2:2:end) = uIn(:,2);
-            U = zeros(nG,1);
-            U(1:2:end) = UIn(:,1);
-            U(2:2:end) = UIn(:,2);
-            
             % element dof
-            uTilde = Matrix3D( permute( u(obj.gDof.'),[1,3,2]) );
-            UTilde = Matrix3D( permute( U(obj.gDof.'),[1,3,2]) );
+            u_e = Matrix3D( permute( u(obj.gDof.'),[1,3,2]) );
+            U_e = Matrix3D( permute( U(obj.gDof.'),[1,3,2]) );
             
             % Gauss integration points & weight factor
             r = [1/3 0 0];
             s = [1/3 0 0];
-            [n1,n2,n3]=obj.shapeFunValsAtIntPoints(r,s);
+            [n1,~,~]=obj.shapeFunValsAtIntPoints(r,s);
             N = Matrix3D(repmat(n1,[1,1,nTri]));
-            
             DNDx = obj.dNdx;
             DNDy = obj.dNdy;
             
-            uj = N*uTilde;
-            DujDx = DNDx*uTilde;
-            DujDy = DNDy*uTilde;
+            % Iteration-constant terms
+            % uj [2,6,nTri double]
+            % row-component j is summed in the divergence calculation
+            uj = N*u_e;
+            DujDx = DNDx*u_e;
+            DujDy = DNDy*u_e;
             
-            % chain rule
-            Du1UiDx = DujDx(1,:,:).*N + uj(1,:,:).*DNDx;
-            Du2UiDy = DujDy(2,:,:).*N + uj(2,:,:).*DNDy;
-            
+            % Divergence coefficent term divUi [2,6,nTri double]
+            % divergence([u]*Ui) = divuUi*U_e  
+            % row-component i corresponds to divergence of independent terms U1, U2
+            div_uUi = (DujDx(1,:,:)+DujDy(2,:,:)).*N + uj(1,:,:).*DNDx + uj(2,:,:).*DNDy;
+                 
             % compute divergence
-            divU = (Du1UiDx + Du2UiDy)*UTilde;
-            divU1 = squeeze( divU(1,:,:) );
-            divU2 = squeeze( divU(2,:,:) );
+            divergenceuUi = div_uUi*U_e;
+            div_uU1 = squeeze( divergenceuUi(1,:,:) );
+            div_uU2 = squeeze( divergenceuUi(2,:,:) );
         end
         function obj = computeConvectionMatrices(obj,u)
             % Computes convection-related matrices
             nTri = size(obj.nodeIDs,1);
+            
+            % element dof
+            u_e = Matrix3D( permute( u(obj.gDof.'),[1,3,2]) );
             
             % Gauss integration points & weight factor
             r = [2/3 1/6 1/6];
@@ -230,21 +253,35 @@ classdef Tri2D
             N2 = Matrix3D(repmat(n2,[1,1,nTri]));
             N3 = Matrix3D(repmat(n3,[1,1,nTri]));
             
-            keyboard
-            % update this section
+            % Shape function derivatives are constant inside elements
+            DNDx = obj.dNdx;
+            DNDy = obj.dNdy;
+            
+            % Iteration-constant terms
+            % uj [2,6,nTri double]
+            % row-component j is summed in the divergence calculation
+            uj1 = N1*u_e;
+            uj2 = N2*u_e;
+            uj3 = N3*u_e;
+            DujDx = DNDx*u_e;
+            DujDy = DNDy*u_e;
+            
+            % Divergence coefficent terms divUi [2,6,nTri double]
+            % divergence([u]*Ui) = divuUi*U_e
+            % row-component i corresponds to divergence of independent terms [u]*U1, [u]*U2
+            div_uUi1 = (DujDx(1,:,:)+DujDy(2,:,:)).*N1 + uj1(1,:,:).*DNDx + uj1(2,:,:).*DNDy;
+            div_uUi2 = (DujDx(1,:,:)+DujDy(2,:,:)).*N2 + uj2(1,:,:).*DNDx + uj2(2,:,:).*DNDy;
+            div_uUi3 = (DujDx(1,:,:)+DujDy(2,:,:)).*N3 + uj3(1,:,:).*DNDx + uj3(2,:,:).*DNDy;
 
             % Convection matrix (3-point integration)
-            uTilde = Matrix3D( permute( u(obj.gDof.'),[1,3,2]) );
-            DNu = obj.dNdX(1,:,:)*uTilde + obj.dNdX(2,:,:)*uTilde;
-            DuN1 = DNu.*N1 + N1([1,1],:,:)*uTilde*obj.dNdX(1,:,:) + N1([2,2],:,:)*uTilde*obj.dNdX(2,:,:);
-            DuN2 = DNu.*N2 + N2([1,1],:,:)*uTilde*obj.dNdX(1,:,:) + N2([2,2],:,:)*uTilde*obj.dNdX(2,:,:);
-            DuN3 = DNu.*N3 + N3([1,1],:,:)*uTilde*obj.dNdX(1,:,:) + N3([2,2],:,:)*uTilde*obj.dNdX(2,:,:);
-            obj.Cu = w3*obj.area.*(N1.'*DuN1 + N2.'*DuN2 + N3.'*DuN3);            
+            obj.Cu = w3*obj.area.*(N1.'*div_uUi1 + ...
+                                   N2.'*div_uUi2 + ...
+                                   N3.'*div_uUi3);            
             
             % Convection stabilization matrix (3-point integration)
-            obj.Ku = -0.5*w3*obj.area.*( Matrix3D(DuN1).'*DuN1 + ...
-                                         Matrix3D(DuN2).'*DuN2 + ...
-                                         Matrix3D(DuN3).'*DuN3 );
+            obj.Ku = -0.5*w3*obj.area.*( Matrix3D(div_uUi1).'*div_uUi1 + ...
+                                         Matrix3D(div_uUi2).'*div_uUi2 + ...
+                                         Matrix3D(div_uUi3).'*div_uUi3 );
         end
         
     end
