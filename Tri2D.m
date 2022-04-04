@@ -13,14 +13,22 @@ classdef Tri2D
 
         invJ % [2,2,nTri Matrix3D] inverse of Jacobian matrix (constant inside elements)
         area % [:,:,nTri double] element area
-        dNdx % [2,6,nTri double] physical shape function x derivatives for element assembly (constant inside elements)
-        dNdy % [2,6,nTri double] physical shape function y derivatives for element assembly (constant inside elements)
+        dNdx % [2,6,nTri double] physical shape function x derivatives for vector assembly (constant inside elements)
+        dNdy % [2,6,nTri double] physical shape function y derivatives for vector assembly (constant inside elements)
+        dNpdx % [1,3,nTri double] physical shape function x derivatives for scalar assembly (constant inside elements)
+        dNpdy % [1,3,nTri double] physical shape function y derivatives for scalar assembly (constant inside elements)
         B    % [3,6,nTri Matrix3D] velocity-strain rate matrix (constant inside elements)
         
         M    % [6,6,nTri double] mass matrix
         Ktau % [6,6,nTri double] deviatoric stress stiffness matrix
         Cu   % [6,6,nTri double] Convection matrix
         Ku   % [6,6,nTri double] Convection stabilization matrix
+        
+        P % [~,~,nTri double] Pressure-velocity stabalization matrix
+        H % [3,3,nTri double] Pressure stabalization matrix
+        Mp % [3,3,nTri double] Pressure mass matrix            
+        G  % [3,6,nTri double] Pressure-velocity coupling matrix (3-point integration)
+        
     end
     
     methods
@@ -115,6 +123,9 @@ classdef Tri2D
             obj.dNdy(1,[1,3,5],:)=dNdX(2,:,:);
             obj.dNdy(2,[2,4,6],:)=dNdX(2,:,:);
             
+            obj.dNpdx = Matrix3D(dNdX(1,:,:));
+            obj.dNpdy = Matrix3D(dNdX(2,:,:));
+            
             % Deviatoric stress stiffness matrix (1-point integration)
             mu = ones(1,1,nTri); % UPDATE PLACEHOLDER !!!!!!!
             m = [1, 1, 0].';
@@ -133,7 +144,7 @@ classdef Tri2D
             w3 = 1/3;
             
             % Shape function values at integration points
-            [N1,N2,N3]=obj.shapeFunValsAtIntPoints(r,s);
+            [N1,N2,N3]=obj.vectorShapeFunValsAtIntPoints(r,s);
                         
             % Mass matrix (3-point integration)
             Me = w3*(N1.'*N1 + N2.'*N2 + N3.'*N3); % area-normalized mass matrix
@@ -213,7 +224,7 @@ classdef Tri2D
             % Gauss integration points & weight factor
             r = [1/3 0 0];
             s = [1/3 0 0];
-            [n1,~,~]=obj.shapeFunValsAtIntPoints(r,s);
+            [n1,~,~]=obj.vectorShapeFunValsAtIntPoints(r,s);
             N = Matrix3D(repmat(n1,[1,1,nTri]));
             DNDx = obj.dNdx;
             DNDy = obj.dNdy;
@@ -248,7 +259,7 @@ classdef Tri2D
             w3 = 1/3;
             
             % Shape function values at integration points
-            [n1,n2,n3]=obj.shapeFunValsAtIntPoints(r,s);
+            [n1,n2,n3]=obj.vectorShapeFunValsAtIntPoints(r,s);
             N1 = Matrix3D(repmat(n1,[1,1,nTri]));
             N2 = Matrix3D(repmat(n2,[1,1,nTri]));
             N3 = Matrix3D(repmat(n3,[1,1,nTri]));
@@ -282,12 +293,134 @@ classdef Tri2D
             obj.Ku = -0.5*w3*obj.area.*( Matrix3D(div_uUi1).'*div_uUi1 + ...
                                          Matrix3D(div_uUi2).'*div_uUi2 + ...
                                          Matrix3D(div_uUi3).'*div_uUi3 );
+                                     
+            % Pressure-velocity stabalization matrix (3-point integration)
+            dNpdX = zeros(2,3,nTri);
+            dNpdX(1,:,:) = obj.dNpdx;
+            dNpdX(2,:,:) = obj.dNpdy;
+            obj.P =  w3*obj.area.*(Matrix3D(div_uUi1).'*dNpdX + ...
+                                   Matrix3D(div_uUi2).'*dNpdX + ...
+                                   Matrix3D(div_uUi3).'*dNpdX );
+        end
+        function obj = computePressureEquationMatrices(obj,c)
+            nTri = size(obj.nodeIDs,1);
+            
+            % Gauss integration points & weight factor
+            r = [2/3 1/6 1/6];
+            s = [1/6 1/6 2/3];
+            w3 = 1/3;
+            
+            % Shape function values at integration points
+            [np1,np2,np3]=obj.scalarShapeFunValsAtIntPoints(r,s);
+            [nu1,nu2,nu3]=obj.vectorShapeFunValsAtIntPoints(r,s);
+            sumNu1 = Matrix3D(repmat(sum(nu1),[1,1,nTri]));
+            sumNu2 = Matrix3D(repmat(sum(nu2),[1,1,nTri]));
+            sumNu3 = Matrix3D(repmat(sum(nu3),[1,1,nTri]));
+            
+            % Pressure mass matrix (3-point integration)
+            mp = w3*(np1.'*np1 + np2.'*np2 + np3.'*np3); % area-normalized mass matrix
+            obj.Mp = (1/c^2)*obj.area.*repmat(mp,[1,1,nTri]);
+            
+            % Shape function derivatives are constant inside elements
+            DNpDx = obj.dNpdx;
+            DNpDy = obj.dNpdy;
+            
+            % Pressure stabalization matrix (1-point integration)
+            obj.H = obj.area.* (DNpDx.'*DNpDx + DNpDy.'*DNpDy);
+            
+            % Pressure-velocity coupling matrix (3-point integration)
+            obj.G = w3*obj.area.*(DNpDx.'*sumNu1 + DNpDy.'*sumNu1 + ...
+                                  DNpDx.'*sumNu2 + DNpDy.'*sumNu2 + ...
+                                  DNpDx.'*sumNu3 + DNpDy.'*sumNu3 );
         end
         
+        function [Mu,Cu,Ktau,Ku,Mp,H,G,P] = assembleGlobalMatrices(obj)
+            nTri = size(obj.nodeIDs,1);
+            
+            % 6x6 Index management
+            colDof6x6 = zeros(6,6,nTri,'uint32');
+            rowDof6x6 = colDof6x6;
+            colDof6x6(1,:,:) = permute(obj.gDof,[3,2,1]);
+            colDof6x6(2,:,:) = colDof6x6(1,:,:);
+            colDof6x6(3,:,:) = colDof6x6(1,:,:);
+            colDof6x6(4,:,:) = colDof6x6(1,:,:);
+            colDof6x6(5,:,:) = colDof6x6(1,:,:);
+            colDof6x6(6,:,:) = colDof6x6(1,:,:);
+            colIndex6x6 = double( colDof6x6(:) );
+            
+            rowDof6x6(:,1,:) = permute(obj.gDof,[2,3,1]);
+            rowDof6x6(:,2,:) = rowDof6x6(:,1,:);
+            rowDof6x6(:,3,:) = rowDof6x6(:,1,:);
+            rowDof6x6(:,4,:) = rowDof6x6(:,1,:);
+            rowDof6x6(:,5,:) = rowDof6x6(:,1,:);
+            rowDof6x6(:,6,:) = rowDof6x6(:,1,:);
+            rowIndex6x6 = double( rowDof6x6(:) );
+            
+            % Assemble 6x6 element matrices
+            Mu = sparse(rowIndex6x6,colIndex6x6,obj.M(:));
+            Cu = sparse(rowIndex6x6,colIndex6x6,obj.Cu(:));
+            Ktau = sparse(rowIndex6x6,colIndex6x6,obj.Ktau(:));
+            Ku = sparse(rowIndex6x6,colIndex6x6,obj.Ku(:));
+            
+            % 3x3 Index management
+            colDof3x3 = zeros(3,3,nTri,'uint32');
+            rowDof3x3 = colDof3x3;
+            colDof3x3(1,:,:) = permute(obj.nodeIDs,[3,2,1]);
+            colDof3x3(2,:,:) = colDof3x3(1,:,:);
+            colDof3x3(3,:,:) = colDof3x3(1,:,:);
+            colIndex3x3 = double( colDof3x3(:) );
+            
+            rowDof3x3(:,1,:) = permute(obj.nodeIDs,[2,3,1]);
+            rowDof3x3(:,2,:) = rowDof3x3(:,1,:);
+            rowDof3x3(:,3,:) = rowDof3x3(:,1,:);
+            rowIndex3x3 = double( rowDof3x3(:) );
+            
+            % Assemble 3x3 element matrices
+            Mp = sparse(rowIndex3x3,colIndex3x3,obj.Mp(:));
+            H = sparse(rowIndex3x3,colIndex3x3,obj.H(:));
+            
+            % 3x6 Index management
+            colDof3x6 = zeros(3,6,nTri,'uint32');
+            rowDof3x6 = colDof3x6;
+            colDof3x6(1,:,:) = permute(obj.gDof,[3,2,1]);
+            colDof3x6(2,:,:) = colDof3x6(1,:,:);
+            colDof3x6(3,:,:) = colDof3x6(1,:,:);
+            colIndex3x6 = double( colDof3x6(:) );
+            
+            rowDof3x6(:,1,:) = permute(obj.nodeIDs,[2,3,1]);
+            rowDof3x6(:,2,:) = rowDof3x6(:,1,:);
+            rowDof3x6(:,3,:) = rowDof3x6(:,1,:);
+            rowDof3x6(:,4,:) = rowDof3x6(:,1,:);
+            rowDof3x6(:,5,:) = rowDof3x6(:,1,:);
+            rowDof3x6(:,6,:) = rowDof3x6(:,1,:);
+            rowIndex3x6 = double( rowDof3x6(:) );
+            
+            % Assemble 3x6 element matrices
+            G = sparse(rowIndex3x6,colIndex3x6,obj.G(:));
+            
+            % 6x3 Index management
+            colDof6x3 = zeros(6,3,nTri,'uint32');
+            rowDof6x3 = colDof6x3;
+            colDof6x3(1,:,:) = permute(obj.nodeIDs,[3,2,1]);
+            colDof6x3(2,:,:) = colDof6x3(1,:,:);
+            colDof6x3(3,:,:) = colDof6x3(1,:,:);
+            colDof6x3(4,:,:) = colDof6x3(1,:,:);
+            colDof6x3(5,:,:) = colDof6x3(1,:,:);
+            colDof6x3(6,:,:) = colDof6x3(1,:,:);
+            colIndex6x3 = double( colDof6x3(:) );
+            
+            rowDof6x3(:,1,:) = permute(obj.gDof,[2,3,1]);
+            rowDof6x3(:,2,:) = rowDof6x3(:,1,:);
+            rowDof6x3(:,3,:) = rowDof6x3(:,1,:);
+            rowIndex6x3 = double( rowDof6x3(:) );
+            
+            % Assemble 6x3 element matrices
+            P = sparse(rowIndex6x3,colIndex6x3,obj.P(:));
+        end
     end
     methods (Static = true, Access = private)
-        function [N1,N2,N3]=shapeFunValsAtIntPoints(r,s)
-            % Shape function values at integration points
+        function [N1,N2,N3]=vectorShapeFunValsAtIntPoints(r,s)
+            % 2D vector shape function values at integration points
             % shapeFunctions = @(r,s) [1-r-s, r, s];
             N1 = [1-r(1)-s(1),           0, r(1),    0, s(1),   0   ;
                             0, 1-r(1)-s(1),    0, r(1),    0, s(1) ];
@@ -295,6 +428,13 @@ classdef Tri2D
                             0, 1-r(2)-s(2),    0, r(2),    0, s(2) ];
             N3 = [1-r(3)-s(3),           0, r(3),    0, s(3),   0   ;
                             0, 1-r(3)-s(3),    0, r(3),    0, s(3) ];
+        end
+        function [N1,N2,N3]=scalarShapeFunValsAtIntPoints(r,s)
+            % Scalar shape function values at integration points
+            % shapeFunctions = @(r,s) [1-r-s, r, s];
+            N1 = [1-r(1)-s(1), r(1), s(1)];
+            N2 = [1-r(2)-s(2), r(2), s(2)];
+            N3 = [1-r(3)-s(3), r(3), s(3)];
         end
     end
 

@@ -1,76 +1,124 @@
 clear all; close all; clc
 
+%% Boundary conditions
+rho = 1.22500; % kg/m^3
+a = 340.294; % m/s - sound speed
+uinf = 0.4*a;
+UxBoundary = rho*uinf;
+UyBoundary = 0;
+
+% mu = 0.0000181206; % [Pa s] dynamic viscosity
+% P0 = 101325; % Pa initial pressure
+T = 288.150; % K, initial temperature
+R = 287.05; % [J/kg K] air gas constant
+P0 = rho*R*T;
+
+
+dt = 0.001/(uinf + a);
+theta1 = 0.75;
+
 %% Load mesh file
 gmf = Gmf(fullfile('naca0012','mesh_NACA0012_inv.mesh'));
 gmf.writeVTK('naca0012.vtk');
 
+
 %% Assemble mesh
 tri2D = Tri2D(gmf);
-tri2D = computeMassMatrix(tri2D);
 
-%% Manufactured solution
-x = gmf.nodes(:,1);
-y = gmf.nodes(:,2);
-a = manufacturedSolution(x,y);
-
-xc = tri2D.computeCenterFromNodes(x);
-yc = tri2D.computeCenterFromNodes(y);
-ac = manufacturedSolution(xc,yc);
-
-% Create global vectors from manufactured components
+%% Initial guess
 u = zeros(2*size(gmf.nodes,1),1);
-U = zeros(2*size(gmf.nodes,1),1);
-u(1:2:end,1) = a.u1;
-u(2:2:end,1) = a.u2;
-U(1:2:end,1) = a.U1;
-U(2:2:end,1) = a.U2;
+u(1:2:end,1) = uinf;
+u(2:2:end,1) = 0;
+U = rho*u;
 
-%% Assemble matricies
-tri2D = computeConvectionMatrices(tri2D,u);
+p = P0*ones(size(gmf.nodes,1),1);
 
 
-% %% Append VTK file
-% fid = fopen('naca0012.vtk','a+');
-% fprintf(fid,'POINT_DATA %d\n',size(gmf.nodes,1));
-% fprintf(fid,'SCALARS uUn float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',u1.*U1);
-% fprintf(fid,'SCALARS du1U1dx float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',du1U1dx);
-% fprintf(fid,'SCALARS du1U1dy float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',du1U1dy);
+%% Assemble Constant Element matricies
+tri2D = computeMassMatrix(tri2D);
+tri2D = computePressureEquationMatrices(tri2D,a);
 
-% fprintf(fid,'CELL_DATA %d\n',size(gmf.tri,1));
-% fprintf(fid,'SCALARS uU float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',ac.u1.*ac.U1);
-% 
-% fprintf(fid,'SCALARS divU1a float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',ac.divU1);
-% fprintf(fid,'SCALARS divU1b float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',divU1b);
-% fprintf(fid,'SCALARS divU1c float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',divU1c);
-% fprintf(fid,'SCALARS divU1Error float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',ac.divU1-divU1b);
-% 
-% fprintf(fid,'SCALARS divU2a float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',ac.divU2);
-% fprintf(fid,'SCALARS divU2b float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',divU2b);
-% fprintf(fid,'SCALARS divU2c float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',divU2c);
-% fprintf(fid,'SCALARS divU2Error float\n');
-% fprintf(fid,'LOOKUP_TABLE default\n');
-% fprintf(fid,'%f\n',ac.divU2-divU2b);
+%% Global system sets
+% U is specified at boundary ID #2
+USpecifedNodes = gmf.edges(gmf.edges(:,3)==2,1:2);
+USpecifedNodes = unique(USpecifedNodes(:));
+UxSpecifedDof = 2*USpecifedNodes - 1;
+UySpecifedDof = 2*USpecifedNodes;
 
-% fclose(fid);
+% Dof sets
+nPdof = size(gmf.nodes,1);
+nUdof = 2*nPdof;
+
+% U fixed
+s = false(nUdof,1);
+s(UxSpecifedDof) = true;
+s(UySpecifedDof) = true;
+numSdof = sum(s);
+Us = spalloc(nUdof,1,numSdof);
+Us(UxSpecifedDof) = UxBoundary;
+Us(UySpecifedDof) = UyBoundary;
+
+% U free
+f = ~s;
+
+% for i = 1:100
+    % Update global system matrices
+    tri2D = computeConvectionMatrices(tri2D,u);
+    [Mu,Cu,Ktau,Ku,Mp,H,G,P] = tri2D.assembleGlobalMatrices();
+    
+    % Partition matrices
+    Muff = Mu(f,f);
+    Cuff = Cu(f,f);
+    Kuff = Ku(f,f);
+    pff  = ( Cu(f,s) - dt*Ku(f,s)) *Us(s);
+    Uf = U(f);
+    
+    % Step 1
+    deltaUf = -dt*Muff\(Cuff*Uf - dt*Kuff*Uf + pff);
+    deltaU1 = zeros(nUdof,1);
+    deltaU1(f) = deltaUf;
+    
+    % Step 2
+    deltaP = dt*Mp\(G*U + .5*G*deltaU1 - dt*theta1*H*p);
+    
+    % Step 3
+    deltaU2 = -dt*Mu\(G.'*p + (dt/2)*P*p);
+    
+    % Increment values
+    U = U + (deltaU1 + deltaU2);
+    U(s) = Us(s);
+    
+    p = p + deltaP;
+    rho = (1/(R*T)).*p;
+    u(1:2:end) = U(1:2:end)./rho;
+    u(2:2:end) = U(2:2:end)./rho;
+    
+% end
+
+%% Append VTK file
+fid = fopen('naca0012.vtk','a+');
+fprintf(fid,'POINT_DATA %d\n',size(gmf.nodes,1));
+
+fprintf(fid,'SCALARS rho float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',rho);
+
+fprintf(fid,'SCALARS p float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',p);
+
+fprintf(fid,'SCALARS u1 float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',u(1:2:end));
+fprintf(fid,'SCALARS u2 float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',u(2:2:end));
+
+fprintf(fid,'SCALARS U1 float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',U(1:2:end));
+fprintf(fid,'SCALARS U2 float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',U(2:2:end));
+
+fclose(fid);
