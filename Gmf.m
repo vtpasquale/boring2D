@@ -10,54 +10,29 @@ classdef Gmf
     
     % Anthony Ricciardi
 
-    properties
-%         dimension      % [double] dimension.
-%         nNodes  % [double] Number of vertices. 
-%         nSurfQuads  % [double] Number of quadrilateral boundary surface faces.
-%         nVolTets    % [double] Number of tetrahedral volume elements. 
-%         nVolPents5  % [double] Number of pentahedral volume elements with five nodes (pyramid).
-%         nVolPents6  % [double] Number of pentahedral volume elements with six nodes (prismatic).
-%         nVolHexs    % [double] Number of hexahedral volume elements.
-        
+    properties      
         nodes % [nNodes,2 double] Node locations (X,Y).
-        edges % [nNodes,2 double] Node locations (X,Y). 
-        tri   % [nSurfTrias,3 double] Node indices for triangular boundary surface faces.
-
-%         quad  % [nSurfQuads,4 double] Node indices for quadrilateral boundary surface faces.
-%         boundarySurfFaceID % [nBoundarySurfFaces,1 double] Surface IDs for boundary faces.
-%         tet   % [nVolTets,4 double] Node indices for tetrahedral volume elements.
-%         pent5 % [nVolPents5,5 double] Node indices for pentahedral volume elements with five nodes (pyramid).
-%         pent6 % [nVolPents6,6 double] Node indices for pentahedral volume elements with six nodes (prismatic).
-%         hex   % [nVolHexs,4 double] Node indices for hexahedral volume elements.
-        
-    end
-    
-%     properties (Dependent = true)
-%         nBoundarySurfFaces % [double] Number of boundary surface faces (nSurfTrias + nSurfQuads).
-%         nElements % [double] Number of all surface and volume elements.
-%         nCellData % [double] Number of cell data fields in VTK output.
-%     end
-    
-    
+        edges % [nNodes,3 double] Edge nodes numbers and boundary number. 
+        tri   % [nSurfTrias,3 double] Node indices for triangular boundary surface faces.        
+    end   
     methods
         function obj = Gmf(in)
             % Gmf class constructor
             if ischar(in)
-                obj = obj.constructFromFile(in);
+                % check file extension
+                [~,~,extension] = fileparts(in);
+                switch extension
+                    case '.mesh'
+                        obj = obj.constructFromMeshFile(in);
+                    case '.plt'
+                        obj = obj.constructFromPltFile(in);
+                    otherwise
+                        error('Mesh file extension %s not supported',extension)
+                end
             else
                 error('Gmf class constructor input type incorrect')
             end
         end % Gmf()
-        
-%         function out = get.nBoundarySurfFaces(obj)
-%             out = obj.nSurfTrias + obj.nSurfQuads;
-%         end
-%         function out = get.nElements(obj)
-%             out = obj.nSurfTrias + obj.nSurfQuads + obj.nVolTets + obj.nVolPents5 + obj.nVolPents6 + obj.nVolHexs;
-%         end
-%         function out = get.nCellData(obj)
-%             out = 4*obj.nSurfTrias + 5*obj.nSurfQuads + 5*obj.nVolTets + 6*obj.nVolPents5 + 7*obj.nVolPents6 + 9*obj.nVolHexs;
-%         end
         
         function writeVTK(obj,filename)
             % Write the mesh to a .vtk file.
@@ -94,13 +69,12 @@ classdef Gmf
             
             fclose(fid);
         end % writeVTK()
-% %         
     end 
     
     
     methods (Access=private)
-        function obj = constructFromFile(obj,in)
-            % Construct Ugrid from ascii file
+        function obj = constructFromMeshFile(obj,in)
+            % Construct from Gamma Mesh Format ascii file
             fid = fopen(in,'r');
                         
             % Process header
@@ -184,7 +158,47 @@ classdef Gmf
             end
             
             fclose(fid);
-        end % constructFromFile()
+        end % constructFromMeshFile()
+        
+        function obj = constructFromPltFile(obj,in)
+            % Construct from CBSFlow ascii file
+            fid = fopen(in,'r');
+                        
+            % Process header
+            nTriangles = fscanf(fid,'%d',1);
+            nNodes = fscanf(fid,'%d',1);
+            nEdges = fscanf(fid,'%d',1);
+
+            % Read triangles
+            [tri0,count] = fscanf(fid,'%d',4*nTriangles);
+            if count ~=(4*nTriangles); error('Processing issue'); end
+            obj.tri = [tri0(2:4:end),tri0(3:4:end),tri0(4:4:end)];
+            elementNumber = tri0(1:4:end);
+            if any(elementNumber~=(1:nTriangles).')
+                error('Elements not in order - add sorting.')
+            end
+            clear tri0 elementNumber
+            
+            % Read nodes
+            [nodes0,count] = fscanf(fid,'%f',3*nNodes);
+            if count~=(3*nNodes); error('Issue processing Nodes'); end
+            obj.nodes = [nodes0(2:3:end),nodes0(3:3:end)];
+            nodeNumber = nodes0(1:3:end);
+            if any(nodeNumber~=(1:nNodes).')
+                error('Elements not in order - add sorting.')
+            end
+            clear nodes0 nodeNumber
+            
+            % Read edges            
+            [edges0,count] = fscanf(fid,'%d',4*nEdges);
+            if count~=(4*edges0); error('Issue processing Edges'); end
+            obj.edges = [edges0(1:4:end),edges0(2:4:end),edges0(4:4:end)];
+            clear edges0
+            
+            fclose(fid);
+        end % constructFromPltFile()
+        
+        
     end 
     
 end
