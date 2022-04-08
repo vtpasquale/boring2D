@@ -1,0 +1,24 @@
+Restart from prior run (0 - NO, Not even if values exist, 1 - YES, if values exist)
+1
+Energy Calculation Desired (0 - NO, 1 - YES) WILL BE ENABLED IF REQUIRED, IF SET TO OFF.
+0
+Free stream values - Ux, Uy , P, T
+0.01d00    -0.02d00    0.0001d00    0.0d00
+ ntime, beta_opt, epsilon, dtfixed, dtfix,   iwrite
+310000   0       0.5d00   0        1.0d-5   100
+Real Time Information - No of Real Timesteps, Real timestep size
+1 1.0d20
+csafm, theta1
+0.5d00 1.0d00   
+Re, Pr, Ra, Ri
+400.0d00 0.707d00 1000.0d00 0.0d00 
+Convection Type (1 - Natural, 0 - Mixed/Forced)
+0
+Steady State Convergence Tolerances - L2 Norm - Velocity, Pressure and Energy (1 - ON, 0 - OFF) then tolerance itself
+1 1.0d-06 1 1.0d-05 1 1.0d-9
+Output Formats (1 - ON/0 - OFF) Paraview and Tecplot, Nusselt Number Calculation (1 - ON/0 -OFF), Flag of Nusselt Calc Boundary
+1 0 0 501
+Run Time Adjustable Option (1 - Yes, if this file modified, values will be re-read, 0 - NO)
+0
+
+ 
