@@ -5,11 +5,11 @@ classdef Tri2D
     % March 2022
     
     properties
-        nodeIDs % [3,nTri uint32] node numbers
-        x % [3,nTri double] x node locations
-        y % [3,nTri double] y node locations
+        nodeIDs % [nTri,3 uint32] node numbers
+        x % [nTri,3 double] x node locations
+        y % [nTri,3 double] y node locations
         
-        gDof % [6,nTri uint32] global DOF from element DOF. Assumes two dof per node in node order.
+        gDof % [nTri,6 uint32] global DOF from element DOF. Assumes two dof per node in node order.
 
         invJ % [2,2,nTri Matrix3D] inverse of Jacobian matrix (constant inside elements)
         area % [:,:,nTri double] element area
@@ -23,12 +23,13 @@ classdef Tri2D
         Ktau % [6,6,nTri double] deviatoric stress stiffness matrix
         Cu   % [6,6,nTri double] Convection matrix
         Ku   % [6,6,nTri double] Convection stabilization matrix
-        
+                
         P % [~,~,nTri double] Pressure-velocity stabalization matrix
         H % [3,3,nTri double] Pressure stabalization matrix
         Mp % [3,3,nTri double] Pressure mass matrix            
         G  % [3,6,nTri double] Pressure-velocity coupling matrix (3-point integration)
         
+        minimumHeight % [nTri,1 double] Minimum element height
     end
     
     methods
@@ -133,7 +134,11 @@ classdef Tri2D
             stressStrain0 = I0-(2/3)*(m*m.');
             stressStrain = mu.* repmat(stressStrain0,[1,1,nTri]);
             obj.Ktau = obj.area.* (obj.B.'*stressStrain*obj.B);
+            
+            
+            obj = obj.computeElementHeight();
         end
+ 
         function obj = computeMassMatrix(obj)
             % Compute mass matrix
             nTri = size(obj.nodeIDs,1);
@@ -237,7 +242,7 @@ classdef Tri2D
             DujDy = DNDy*u_e;
             
             % Divergence coefficent term divUi [2,6,nTri double]
-            % divergence([u]*Ui) = divuUi*U_e  
+            % divergence([u]*Ui) = div_uUi*U_e  
             % row-component i corresponds to divergence of independent terms U1, U2
             div_uUi = (DujDx(1,:,:)+DujDy(2,:,:)).*N + uj(1,:,:).*DNDx + uj(2,:,:).*DNDy;
                  
@@ -268,7 +273,7 @@ classdef Tri2D
             DNDx = obj.dNdx;
             DNDy = obj.dNdy;
             
-            % Iteration-constant terms
+            % Iteration-constant nonlinear terms
             % uj [2,6,nTri double]
             % row-component j is summed in the divergence calculation
             uj1 = N1*u_e;
@@ -277,32 +282,176 @@ classdef Tri2D
             DujDx = DNDx*u_e;
             DujDy = DNDy*u_e;
             
-            % Divergence coefficent terms divUi [2,6,nTri double]
-            % divergence([u]*Ui) = divuUi*U_e
+            % Divergence coefficent terms GradTuN [2,6,nTri double]
+            % divergence([u]*Ui) = [GradT*(u*N)] *U_e = GradTuN *U_e
             % row-component i corresponds to divergence of independent terms [u]*U1, [u]*U2
-            div_uUi1 = (DujDx(1,:,:)+DujDy(2,:,:)).*N1 + uj1(1,:,:).*DNDx + uj1(2,:,:).*DNDy;
-            div_uUi2 = (DujDx(1,:,:)+DujDy(2,:,:)).*N2 + uj2(1,:,:).*DNDx + uj2(2,:,:).*DNDy;
-            div_uUi3 = (DujDx(1,:,:)+DujDy(2,:,:)).*N3 + uj3(1,:,:).*DNDx + uj3(2,:,:).*DNDy;
+            GradTuN1 = (DujDx(1,:,:)+DujDy(2,:,:)).*N1 + uj1(1,:,:).*DNDx + uj1(2,:,:).*DNDy;
+            GradTuN2 = (DujDx(1,:,:)+DujDy(2,:,:)).*N2 + uj2(1,:,:).*DNDx + uj2(2,:,:).*DNDy;
+            GradTuN3 = (DujDx(1,:,:)+DujDy(2,:,:)).*N3 + uj3(1,:,:).*DNDx + uj3(2,:,:).*DNDy;
 
             % Convection matrix (3-point integration)
-            obj.Cu = w3*obj.area.*(N1.'*div_uUi1 + ...
-                                   N2.'*div_uUi2 + ...
-                                   N3.'*div_uUi3);            
+            obj.Cu = w3*obj.area.*(N1.'*GradTuN1 + ...
+                                   N2.'*GradTuN2 + ...
+                                   N3.'*GradTuN3);            
             
             % Convection stabilization matrix (3-point integration)
-            obj.Ku = -0.5*w3*obj.area.*( Matrix3D(div_uUi1).'*div_uUi1 + ...
-                                         Matrix3D(div_uUi2).'*div_uUi2 + ...
-                                         Matrix3D(div_uUi3).'*div_uUi3 );
+            obj.Ku = -0.5*w3*obj.area.*( Matrix3D(GradTuN1).'*GradTuN1 + ...
+                                         Matrix3D(GradTuN2).'*GradTuN2 + ...
+                                         Matrix3D(GradTuN3).'*GradTuN3 );
                                      
             % Pressure-velocity stabalization matrix (3-point integration)
-            dNpdX = zeros(2,3,nTri);
-            dNpdX(1,:,:) = obj.dNpdx;
-            dNpdX(2,:,:) = obj.dNpdy;
-            obj.P =  w3*obj.area.*(Matrix3D(div_uUi1).'*dNpdX + ...
-                                   Matrix3D(div_uUi2).'*dNpdX + ...
-                                   Matrix3D(div_uUi3).'*dNpdX );
+            GradNp = zeros(2,3,nTri);
+            GradNp(1,:,:) = obj.dNpdx;
+            GradNp(2,:,:) = obj.dNpdy;
+            obj.P =  w3*obj.area.*(Matrix3D(GradTuN1).'*GradNp + ...
+                                   Matrix3D(GradTuN2).'*GradNp + ...
+                                   Matrix3D(GradTuN3).'*GradNp );                              
         end
-        function obj = computePressureEquationMatrices(obj,c)
+        function obj = computeIncompressibleConvectionMatrices(obj,u)
+            % Computes convection-related matrices
+            nTri = size(obj.nodeIDs,1);
+            
+            % element dof
+            u_e = Matrix3D( permute( u(obj.gDof.'),[1,3,2]) );
+            
+            % Gauss integration points & weight factor
+            r = [2/3 1/6 1/6];
+            s = [1/6 1/6 2/3];
+            w3 = 1/3;
+            
+            % Shape function values at integration points
+            [n1,n2,n3]=obj.vectorShapeFunValsAtIntPoints(r,s);
+            N1 = Matrix3D(repmat(n1,[1,1,nTri]));
+            N2 = Matrix3D(repmat(n2,[1,1,nTri]));
+            N3 = Matrix3D(repmat(n3,[1,1,nTri]));
+            
+            % Shape function derivatives are constant inside elements
+            DNDx = obj.dNdx;
+            DNDy = obj.dNdy;
+            
+            % Iteration-constant nonlinear terms
+            % uj [2,6,nTri double]
+            % row-component j is summed in the divergence calculation
+            uj1 = N1*u_e;
+            uj2 = N2*u_e;
+            uj3 = N3*u_e;
+            DujDx = DNDx*u_e;
+            DujDy = DNDy*u_e;
+            
+            % x momentum equation
+            udN1 = uj1(1,:,:).*DNDx + uj1(2,:,:).*DNDy;
+            udN2 = uj2(1,:,:).*DNDx + uj2(2,:,:).*DNDy;
+            udN3 = uj3(1,:,:).*DNDx + uj3(2,:,:).*DNDy;
+
+            % Convection matrix (3-point integration)
+            obj.Cu = w3*obj.area.*(N1.'*udN1 + ...
+                                   N2.'*udN2 + ...
+                                   N3.'*udN3);            
+            
+            % Convection stabilization matrix (3-point integration)
+            obj.Ku =      w3*obj.area.*( Matrix3D(udN1).'*udN1 + ...
+                                         Matrix3D(udN1).'*udN2 + ...
+                                         Matrix3D(udN1).'*udN3 );
+                                     
+            % Pressure-velocity stabalization matrix (3-point integration)
+            GradNp = zeros(2,3,nTri);
+            GradNp(1,:,:) = obj.dNpdx;
+            GradNp(2,:,:) = obj.dNpdy;
+            obj.P =  w3*obj.area.*(Matrix3D(udN1).'*GradNp + ...
+                                   Matrix3D(udN2).'*GradNp + ...
+                                   Matrix3D(udN3).'*GradNp );                              
+        end
+        
+        function obj = computeIncompressibleConvectionMatrices2(obj,u)
+            
+            nTri = size(obj.nodeIDs,1);
+            
+            b = [obj.y(:,2)-obj.y(:,3),obj.y(:,3)-obj.y(:,1),obj.y(:,1)-obj.y(:,2)];
+            c = [obj.x(:,3)-obj.x(:,2),obj.x(:,1)-obj.x(:,3),obj.x(:,2)-obj.x(:,1)];
+            u1 = u(1:2:end);
+            u2 = u(2:2:end);
+            u1e = u1(obj.nodeIDs);
+            u2e = u2(obj.nodeIDs);
+            usu_ =  sum(u1e,2);
+            vsv_ =  sum(u2e,2);
+            usu = zeros(1,1,nTri);
+            usu(:) = usu_;
+            vsv = zeros(1,1,nTri);
+            vsv(:) = vsv_;
+            
+            bm = Matrix3D(zeros(3,3,nTri));
+            cm = bm;
+            bm(1,1,:) = b(:,1);
+            bm(2,1,:) = b(:,1);
+            bm(3,1,:) = b(:,1);
+            bm(1,2,:) = b(:,2);
+            bm(2,2,:) = b(:,2);
+            bm(3,2,:) = b(:,2);
+            bm(1,3,:) = b(:,3);
+            bm(2,3,:) = b(:,3);
+            bm(3,3,:) = b(:,3);
+            cm(1,1,:) = c(:,1);
+            cm(2,1,:) = c(:,1);
+            cm(3,1,:) = c(:,1);
+            cm(1,2,:) = c(:,2);
+            cm(2,2,:) = c(:,2);
+            cm(3,2,:) = c(:,2);
+            cm(1,3,:) = c(:,3);
+            cm(2,3,:) = c(:,3);
+            cm(3,3,:) = c(:,3);
+            
+            u1m = zeros(3,3,nTri);
+            u2m = u1m;
+            u1m(1,1,:) = u1e(:,1);
+            u1m(1,2,:) = u1e(:,1);
+            u1m(1,3,:) = u1e(:,1);
+            u1m(2,1,:) = u1e(:,2);
+            u1m(2,2,:) = u1e(:,2);
+            u1m(2,3,:) = u1e(:,2);
+            u1m(3,1,:) = u1e(:,3);
+            u1m(3,2,:) = u1e(:,3);
+            u1m(3,3,:) = u1e(:,3);
+            u2m(1,1,:) = u2e(:,1);
+            u2m(1,2,:) = u2e(:,1);
+            u2m(1,3,:) = u2e(:,1);
+            u2m(2,1,:) = u2e(:,2);
+            u2m(2,2,:) = u2e(:,2);
+            u2m(2,3,:) = u2e(:,2);
+            u2m(3,1,:) = u2e(:,3);
+            u2m(3,2,:) = u2e(:,3);
+            u2m(3,3,:) = u2e(:,3);
+            
+            % Convection matrix
+            % Matches result from computeIncompressibleConvectionMatrices()
+            C = (1/24) * ( (usu+u1m).*bm + (vsv+u2m).*cm );
+            obj.Cu(1:2:end,1:2:end,:) = C;
+            obj.Cu(2:2:end,2:2:end,:) = C; % 
+
+            % Stabilization matrix            
+            u1av_  = u1e(:,1).*(u1e(:,1)+usu(:)) + u1e(:,2).*(u1e(:,2)+usu(:)) + u1e(:,3).*(u1e(:,3)+usu(:));
+            u12av_ = u1e(:,1).*(u2e(:,1)+vsv(:)) + u1e(:,2).*(u2e(:,2)+vsv(:)) + u1e(:,3).*(u2e(:,3)+vsv(:));
+            u2av_  = u2e(:,1).*(u2e(:,1)+vsv(:)) + u2e(:,2).*(u2e(:,2)+vsv(:)) + u2e(:,3).*(u2e(:,3)+vsv(:));
+            
+            % u21av_ = u2e(:,1).*(u1e(:,1)+usu(:)) + u2e(:,2).*(u1e(:,2)+usu(:)) + u2e(:,3).*(u1e(:,3)+usu(:));
+            u1av  = zeros(1,1,nTri); u1av(:)  = u1av_;
+            u2av  = zeros(1,1,nTri); u2av(:)  = u2av_;
+            u12av = zeros(1,1,nTri); u12av(:) = u12av_;
+            
+            Ks = (1./(48*obj.area)).*(  u1av.*(bm.'.*bm) + u12av.*((bm.'.*cm)+(cm.'.*bm)) + u2av.*(cm.'.*cm));
+            obj.Ku = zeros(6,6,nTri);
+            obj.Ku(1:2:end,1:2:end,:) = Ks;
+            obj.Ku(2:2:end,2:2:end,:) = Ks;
+            
+            %  Momentum diffusion
+            Km = (1./(4*obj.area)).*(  u1av.*(bm.'.*bm) + u2av.*(cm.'.*cm));
+            obj.Ktau = zeros(6,6,nTri);
+            obj.Ktau(1:2:end,1:2:end,:) = Km;
+            obj.Ktau(2:2:end,2:2:end,:) = Km;
+            
+            
+        end
+        
+        function obj = computePressureEquationMatrices(obj,betaIn)
             nTri = size(obj.nodeIDs,1);
             
             % Gauss integration points & weight factor
@@ -319,7 +468,9 @@ classdef Tri2D
             
             % Pressure mass matrix (3-point integration)
             mp = w3*(np1.'*np1 + np2.'*np2 + np3.'*np3); % area-normalized mass matrix
-            obj.Mp = (1/c^2)*obj.area.*repmat(mp,[1,1,nTri]);
+            beta = zeros(1,1,nTri);
+            beta(:) = betaIn;
+            obj.Mp = (1/beta.^2).*obj.area.*repmat(mp,[1,1,nTri]);
             
             % Shape function derivatives are constant inside elements
             DNpDx = obj.dNpdx;
@@ -334,7 +485,7 @@ classdef Tri2D
                                   DNpDx.'*sumNu3 + DNpDy.'*sumNu3 );
         end
         
-        function [Mu,Cu,Ktau,Ku,Mp,H,G,P] = assembleGlobalMatrices(obj)
+        function [Mu,Cu,Ktau,dtKu,Mp,H,G,P] = assembleGlobalMatrices(obj,deltaTimeElement)
             nTri = size(obj.nodeIDs,1);
             
             % 6x6 Index management
@@ -360,7 +511,11 @@ classdef Tri2D
             Mu = sparse(rowIndex6x6,colIndex6x6,obj.M(:));
             Cu = sparse(rowIndex6x6,colIndex6x6,obj.Cu(:));
             Ktau = sparse(rowIndex6x6,colIndex6x6,obj.Ktau(:));
-            Ku = sparse(rowIndex6x6,colIndex6x6,obj.Ku(:));
+            
+            dt = zeros(1,1,nTri);
+            dt(:) = deltaTimeElement;
+            dtKu_e = dt.*obj.Ku;
+            dtKu = sparse(rowIndex6x6,colIndex6x6,dtKu_e(:));
             
             % 3x3 Index management
             colDof3x3 = zeros(3,3,nTri,'uint32');
@@ -416,6 +571,26 @@ classdef Tri2D
             
             % Assemble 6x3 element matrices
             P = sparse(rowIndex6x3,colIndex6x3,obj.P(:));
+        end
+    end
+    methods (Access = private)
+        function obj = computeElementHeight(obj)
+            % Compute element minimum height for time step calculations
+            
+            % using geometry
+            area_ = obj.area(:);
+            length1 = sqrt((obj.x(:,2)-obj.x(:,3)).^2 + (obj.y(:,2)-obj.y(:,3)).^2);
+            length2 = sqrt((obj.x(:,3)-obj.x(:,1)).^2 + (obj.y(:,3)-obj.y(:,1)).^2);
+            length3 = sqrt((obj.x(:,1)-obj.x(:,2)).^2 + (obj.y(:,1)-obj.y(:,2)).^2);
+            height = 2*area_./[length1,length2,length3];
+            obj.minimumHeight = min(height,[],2);
+            
+            % % Equivalent calculation
+            % % Using shape function derivatives (cbsflow2d_main.f90 line 233)
+            % % CBSFlow2dICEX calculates two equivalent ways - the first result
+            % % is simply overwritten by the second result in CBSFlow2dICEX.
+            % minimumHeight_ = min(sqrt(obj.dNpdx.^2 + obj.dNpdy.^2).^(-1));
+            % minimumHeight2 = minimumHeight_(:);
         end
     end
     methods (Static = true, Access = private)
