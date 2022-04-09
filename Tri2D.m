@@ -19,22 +19,7 @@ classdef Tri2D
         dNpdy % [1,3,nTri double] physical shape function y derivatives for scalar assembly (constant inside elements)
         B    % [3,6,nTri Matrix3D] velocity-strain rate matrix (constant inside elements)
         
-        M    % [6,6,nTri double] mass matrix
-        Ktau % [6,6,nTri double] deviatoric stress stiffness matrix
-        Cu   % [6,6,nTri double] Convection matrix
-        Ku   % [6,6,nTri double] Convection stabilization matrix
-        
-        P % [~,~,nTri double] Pressure-velocity stabalization matrix
-        H % [3,3,nTri double] Pressure stabalization matrix
-        Mp % [3,3,nTri double] Pressure mass matrix
-        G  % [3,6,nTri double] Pressure-velocity coupling matrix (3-point integration)
-        
         minimumHeight % [nTri,1 double] Minimum element height
-        
-        Mcd % [3,3,nTri double] Convection-diffusion element mass matrix
-        Kecd % [3,3,nTri double] Convection-diffusion element diffusion matrix (k normalized)
-        Ccd % [3,3,nTri double] Convection-diffusion element convection matrix
-        Kscd % [3,3,nTri double] Convection-diffusion element stabilization matrix (timestep normalized)
     end
     
     methods
@@ -143,79 +128,6 @@ classdef Tri2D
             % %             stressStrain = mu.* repmat(stressStrain0,[1,1,nTri]);
             % %             obj.Ktau = obj.area.* (obj.B.'*stressStrain*obj.B);
         end
-        
-        function obj = compute2dConvectionDiffusionMatrices(obj,u)
-            [nu,mu]=size(u);
-            if nu ~=2; error('This is ment for constant velocity'); end
-            if mu ~=1; error('mu ~=1'); end
-            
-            nTri = size(obj.nodeIDs,1);
-            
-            % 3-Point Gauss integration points & weight factor
-            r = [2/3 1/6 1/6];
-            s = [1/6 1/6 2/3];
-            w3 = 1/3;
-            
-            %% Compute mass matrix
-            % % Using Gauss integration
-            % Shape function values at integration points
-            [n1,n2,n3]=obj.scalarShapeFunValsAtIntPoints(r,s);
-            
-            % Mass matrix (3-point integration)
-            Me = w3*(n1.'*n1 + n2.'*n2 + n3.'*n3); % area-normalized mass matrix
-            Mgauss = obj.area.*repmat(Me,[1,1,nTri]);
-            
-            % % Using area coordinates (NLS Eq. 7.119)
-            Marea = (1./12)*obj.area.*repmat([2 1 1; 1 2 1; 1 1 2],[1,1,nTri]);
-            
-            % Mgauss - Marea = 0 % check
-            
-            %% Compute convection matrix
-            % % Using Gauss integration
-            N1 = Matrix3D(repmat(n1,[1,1,nTri]));
-            N2 = Matrix3D(repmat(n2,[1,1,nTri]));
-            N3 = Matrix3D(repmat(n3,[1,1,nTri]));
-            C1 = N1.'*obj.dNpdx + N2.'*obj.dNpdx + N3.'*obj.dNpdx;
-            C2 = N1.'*obj.dNpdy + N2.'*obj.dNpdy + N3.'*obj.dNpdy;
-            Cgauss = w3.*obj.area.*( u(1)*C1 + u(2)*C2 );
-            
-            % % Using area coordinates (NLS Eq. 7.120)
-            [bm,cm] = obj.computerAreaCoordinateMatrices();
-            Carea = (1/6)*( u(1).*bm + u(2).*cm );
-            
-            % Cgauss - Carea = 0 % check
-            
-            %% Diffusion matrix (k normalized)
-            % % Using Gauss integration (1-point)
-            KeGauss = obj.area.*(obj.dNpdx.'*obj.dNpdx + obj.dNpdy.'*obj.dNpdy);
-            
-            % % Using area coordinates (NLS Eq. 7.122)
-            KeArea = (1./(4*obj.area)).*( bm.'.*bm + cm.'.*cm );
-            
-            % KeGauss - KeArea = 0 % check
-            
-            %% Stabilization matrix (timestep normalized)
-            % % Using Gauss integration (1-point)
-            KsGauss = 0.5*obj.area.*(...
-                u(1).*(u(1).*obj.dNpdx.'*obj.dNpdx + u(2).*obj.dNpdx.'*obj.dNpdy) + ...
-                u(2).*(u(1).*obj.dNpdy.'*obj.dNpdx + u(2).*obj.dNpdy.'*obj.dNpdy) );
-            
-            % % Using area coordinates (NLS Eq. 7.123)
-            KsArea = 0.5*(1./(4*obj.area)).*(...
-                u(1).*(u(1).*bm.'.*bm + u(2).*bm.'.*cm ) + ...
-                u(2).*(u(1).*cm.'.*bm + u(2).*cm.'.*cm ) );
-            
-            % KsGauss - KsArea = 0 % check
-            
-            %% Save to object
-            obj.Mcd = Mgauss;
-            obj.Kecd = KeGauss;
-            obj.Ccd = Cgauss;
-            obj.Kscd = KsGauss;
-            
-        end
-        
-        
         function obj = computeMassMatrix(obj)
             % Compute mass matrix
             nTri = size(obj.nodeIDs,1);
@@ -645,36 +557,8 @@ classdef Tri2D
             % Assemble 6x3 element matrices
             P = sparse(rowIndex6x3,colIndex6x3,obj.P(:));
         end
-        
-        function [M,Ke,C,dtKs] = assemble2dConvectionDiffusionMatrices(obj,deltaTimeElement)
-            nTri = size(obj.nodeIDs,1);
-            
-            % timestep scaling
-            dt = zeros(1,1,nTri);
-            dt(:) = deltaTimeElement;
-            dtKscd = dt.*obj.Kscd;
-            
-            % 3x3 Index management
-            colDof3x3 = zeros(3,3,nTri,'uint32');
-            rowDof3x3 = colDof3x3;
-            colDof3x3(1,:,:) = permute(obj.nodeIDs,[3,2,1]);
-            colDof3x3(2,:,:) = colDof3x3(1,:,:);
-            colDof3x3(3,:,:) = colDof3x3(1,:,:);
-            colIndex3x3 = double( colDof3x3(:) );
-            
-            rowDof3x3(:,1,:) = permute(obj.nodeIDs,[2,3,1]);
-            rowDof3x3(:,2,:) = rowDof3x3(:,1,:);
-            rowDof3x3(:,3,:) = rowDof3x3(:,1,:);
-            rowIndex3x3 = double( rowDof3x3(:) );
-            
-            % Assemble 3x3 element matrices
-            M = sparse(rowIndex3x3,colIndex3x3,obj.Mcd(:));
-            Ke = sparse(rowIndex3x3,colIndex3x3,obj.Kecd(:));
-            C = sparse(rowIndex3x3,colIndex3x3,obj.Ccd(:));
-            dtKs = sparse(rowIndex3x3,colIndex3x3,dtKscd(:));
-        end
     end
-    methods (Access = private)
+    methods (Access = protected)
         function obj = computeElementHeight(obj)
             % Compute element minimum height for time step calculations
             
@@ -693,7 +577,22 @@ classdef Tri2D
             % minimumHeight_ = min(sqrt(obj.dNpdx.^2 + obj.dNpdy.^2).^(-1));
             % minimumHeight2 = minimumHeight_(:);
         end
-        
+        function [rowIndex3x3,colIndex3x3] = compute3x3Indices(obj)
+            % Indices used to assemble global matrices from 3x3 element matrices
+            nTri = size(obj.nodeIDs,1);
+            
+            colDof3x3 = zeros(3,3,nTri,'uint32');
+            rowDof3x3 = colDof3x3;
+            colDof3x3(1,:,:) = permute(obj.nodeIDs,[3,2,1]);
+            colDof3x3(2,:,:) = colDof3x3(1,:,:);
+            colDof3x3(3,:,:) = colDof3x3(1,:,:);
+            colIndex3x3 = double( colDof3x3(:) );
+            
+            rowDof3x3(:,1,:) = permute(obj.nodeIDs,[2,3,1]);
+            rowDof3x3(:,2,:) = rowDof3x3(:,1,:);
+            rowDof3x3(:,3,:) = rowDof3x3(:,1,:);
+            rowIndex3x3 = double( rowDof3x3(:) );
+        end
         function [bm,cm] = computerAreaCoordinateMatrices(obj)
             nTri = size(obj.nodeIDs,1);
             b = [obj.y(:,2)-obj.y(:,3),obj.y(:,3)-obj.y(:,1),obj.y(:,1)-obj.y(:,2)];
@@ -719,8 +618,37 @@ classdef Tri2D
             cm(2,3,:) = c(:,3);
             cm(3,3,:) = c(:,3);
         end
+        function [u1m,u2m] = computeElementVelocityMatrices(obj,u1e,u2e)
+            nTri = size(obj.nodeIDs,1);
+            u1m = zeros(3,3,nTri);
+            u2m = u1m;
+            u1m(1,1,:) = u1e(:,1);
+            u1m(1,2,:) = u1e(:,1);
+            u1m(1,3,:) = u1e(:,1);
+            u1m(2,1,:) = u1e(:,2);
+            u1m(2,2,:) = u1e(:,2);
+            u1m(2,3,:) = u1e(:,2);
+            u1m(3,1,:) = u1e(:,3);
+            u1m(3,2,:) = u1e(:,3);
+            u1m(3,3,:) = u1e(:,3);
+            u2m(1,1,:) = u2e(:,1);
+            u2m(1,2,:) = u2e(:,1);
+            u2m(1,3,:) = u2e(:,1);
+            u2m(2,1,:) = u2e(:,2);
+            u2m(2,2,:) = u2e(:,2);
+            u2m(2,3,:) = u2e(:,2);
+            u2m(3,1,:) = u2e(:,3);
+            u2m(3,2,:) = u2e(:,3);
+            u2m(3,3,:) = u2e(:,3);
+        end
     end
-    methods (Static = true, Access = private)
+    methods (Static = true, Access = protected)
+        function [r,s,w3]=gaussPointsAndWeights()
+            % 3-Point Gauss integration points & weight factor
+            r = [2/3 1/6 1/6];
+            s = [1/6 1/6 2/3];
+            w3 = 1/3;
+        end
         function [N1,N2,N3]=vectorShapeFunValsAtIntPoints(r,s)
             % 2D vector shape function values at integration points
             % shapeFunctions = @(r,s) [1-r-s, r, s];

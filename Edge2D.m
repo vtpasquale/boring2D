@@ -26,6 +26,7 @@ classdef Edge2D
             if mEdge ~=3; error('mEdge~=3');     end
             if any(any(mod(gmf.edges,1)~=0)); error('Noninteger value'); end
             obj.nodeIDs = uint32(gmf.edges(:,1:2));
+            obj.boundaryID = uint32(gmf.edges(:,3));
             
             % Process locations
             x = [ gmf.nodes(obj.nodeIDs(:,1),1),...

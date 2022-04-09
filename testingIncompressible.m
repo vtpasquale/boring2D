@@ -11,38 +11,37 @@ bco = CbsBoundaryDefinition([caseName,'.bco']);
 gmf = Gmf([caseName,'.plt']);
 gmf.writeVTK([caseName,'.vtk']);
 
-tri2D = Tri2D(gmf);
+tri2D = Tri2dIncompressibleLaminarNS(gmf);
 edge2D = Edge2D(gmf);
 nTri = size(tri2D.nodeIDs,1);
 nNodes = size(gmf.nodes,1);
 
 %% Initial conditions
-u = zeros(2*size(gmf.nodes,1),1);
 if par.restart==1
     % Load restart file
     var = CbsRestartFile(fullfile('ldc2d-re400','5000NUcav.var'),nNodes);
-    u(1:2:end,1) = var.u1;
-    u(2:2:end,1) = var.u2;
+    u1 = var.u1;
+    u2 = var.u2;
     p = var.p;
     T = var.T;
 else
     % Initial Conditions
-    u(1:2:end,1) = par.Ux;
-    u(2:2:end,1) = par.Uy;
+    u1 = par.Ux;
+    u2 = par.Uy;
     p = par.P*ones(size(gmf.nodes,1),1);
     T = par.T*ones(size(gmf.nodes,1),1);
 end
-velocity = sqrt(u(1:2:end,1).^2 + u(2:2:end,1).^2 + 0.1E-15);
+velocity = sqrt(u1.^2 + u2.^2 + 0.1E-15);
 
 %% Write intial solution to file
 fid = fopen([caseName,'.vtk'],'a+');
 fprintf(fid,'POINT_DATA %d\n',nNodes);
 fprintf(fid,'SCALARS u1 float\n');
 fprintf(fid,'LOOKUP_TABLE default\n');
-fprintf(fid,'%f\n',u(1:2:end,1));
+fprintf(fid,'%f\n',u1);
 fprintf(fid,'SCALARS u2 float\n');
 fprintf(fid,'LOOKUP_TABLE default\n');
-fprintf(fid,'%f\n',u(2:2:end,1));
+fprintf(fid,'%f\n',u2);
 fprintf(fid,'SCALARS p float\n');
 fprintf(fid,'LOOKUP_TABLE default\n');
 fprintf(fid,'%f\n',p);
@@ -65,14 +64,18 @@ end
 % Local time stepping
 if par.beta_opt~=0; error('update for par.beta_opt~=0'); end
 
-%% Compute mass matrix
-tri2D = computeMassMatrix(tri2D);
-% 
-% 
-% tri2D = computePressureEquationMatrices(tri2D,999);
-% tri2D = computeConvectionMatrices(tri2D,u);
-% [Mu,Cu,Ktau,Ku,Mp,H,G,P] = tri2D.assembleGlobalMatrices();
-% Mud = full(sum(Mu,2));% lumped mass matrix
+%% Boundary Condition Processing
+edge = edge2D;
+for i = 1:size(bco.flagList,1)
+    edge.boundaryID( edge2D.boundaryID==bco.flagList(i) ) = bco.flagCode(i);
+end
+nodes500_ = edge.nodeIDs(edge.boundaryID==500,:);
+nodesWall = unique( nodes500_(:));
+nodes503_ = edge.nodeIDs(edge.boundaryID==503,:);
+nodesLid = unique( nodes503_(:));
+
+%%
+tri2D = tri2D.computeElementMatrices(u1,u2);
 
 %% Begin time stepping
 realTime = 0;
@@ -93,9 +96,10 @@ for i = startStep:par.nRealTimesteps
     
 %     while pseudoTimeSteps < par.ntime
         % previous values
-        u1=u;
-        p1=p;
-        T1=T;
+        u10=u1;
+        u20=u2;
+        p0=p;
+        T0=T;
         
         % Calculate step size for elements
         % if par.beta_opt~=0; error('update for par.beta_opt~=0'); end
@@ -110,30 +114,38 @@ for i = startStep:par.nRealTimesteps
         % These two terms are equal for me
         % par.csafm*tri2D.minimumHeight.^2*re_half - (par.csafm*tri2D.minimumHeight./(maxElementVelocity+beta) )
         
-        % convective matricies
-        tri2D = computeConvectionMatrices(tri2D,u);
-%         tri2D = tri2D.computeIncompressibleConvectionMatrices(u);
-        tri2D = tri2D.computeIncompressibleConvectionMatrices2(u);
-%         C = tri2D.Cu(:,:,1);
-%         gDof = tri2D.gDof(1,:);
-%         usu = 3*u(1);
-%         vsv = 3*u(2);
-%         bi = tri2D.y(1,2) - tri2D.y(1,3);
-%         ci = tri2D.x(1,3) - tri2D.x(1,2);
-%         ((1/24)*(vsv+u(2))*ci) - C(1,1)
-        tri2D = computePressureEquationMatrices(tri2D,beta);
-        [Mu,Cu,Ktau,dtKu,Mp,H,G,P] = tri2D.assembleGlobalMatrices(deltaTimeElement);
+        [Mdt,dtC,dtK,dt2Ks,dtG1,dtG2,...
+         M,    C,  K, dtKs,  G1,  G2, ...
+         Mdtb2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
         
-%         rhs = -Cu*u; % spot on
+%         % Step 1       
+%         deltaUstarA = -M  \(dtC+ani*dtK+.5*dt2Ks)*u1;
+%         deltaUstarB = -Mdt\(  C+ani*  K+.5* dtKs)*u1;
+        
+        % CBSflow consistent
+        invDiagMdt = full(sum(Mdt,2)).^-1;
+        deltaU1 = -invDiagMdt.*(  C+ani*  K+.5* dtKs)*u1;
+        deltaU2 = -invDiagMdt.*(  C+ani*  K+.5* dtKs)*u2;
+        u1 = u1 + deltaU1;
+        u2 = u2 + deltaU2;
+        
+        % Apply BC
+        u1(nodesLid) = 1.0;
+        u2(nodesLid) = 0;
+        u1(nodesWall) = 0;
+        u2(nodesWall) = 0;
+        
+        % Step 2
+        invDiagMdtbt2 = full(sum(Mdtb2,2)).^-1; % spot on
+        rhs = -K*p - (dtG1*(u1-u10) + dtG2*(u2-u20));
+        
+        % need to debug rhs
+       
         
 
-%           rhs = -.5*dtKu*u; % off, insignificant for test case
-%         rhs =  -ani*Ktau*u; % % off, significant for test case
         
-        rhs = -Cu*u -ani*Ktau*u -.5*dtKu*u;
-
 end
 
+% fprintf(1,'%f\n',ee(1:8))
 fprintf(1,'%E\n',rhs(1:8))
-
 
