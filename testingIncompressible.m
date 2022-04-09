@@ -26,26 +26,12 @@ if par.restart==1
     T = var.T;
 else
     % Initial Conditions
-    u1 = par.Ux;
-    u2 = par.Uy;
+    u1 = par.Ux*ones(size(gmf.nodes,1),1);
+    u2 = par.Uy*ones(size(gmf.nodes,1),1);
     p = par.P*ones(size(gmf.nodes,1),1);
     T = par.T*ones(size(gmf.nodes,1),1);
 end
-velocity = sqrt(u1.^2 + u2.^2 + 0.1E-15);
 
-%% Write intial solution to file
-fid = fopen([caseName,'.vtk'],'a+');
-fprintf(fid,'POINT_DATA %d\n',nNodes);
-fprintf(fid,'SCALARS u1 float\n');
-fprintf(fid,'LOOKUP_TABLE default\n');
-fprintf(fid,'%f\n',u1);
-fprintf(fid,'SCALARS u2 float\n');
-fprintf(fid,'LOOKUP_TABLE default\n');
-fprintf(fid,'%f\n',u2);
-fprintf(fid,'SCALARS p float\n');
-fprintf(fid,'LOOKUP_TABLE default\n');
-fprintf(fid,'%f\n',p);
-fclose(fid);
 
 %% various logic and checks
 % Convection Logic
@@ -74,8 +60,6 @@ nodesWall = unique( nodes500_(:));
 nodes503_ = edge.nodeIDs(edge.boundaryID==503,:);
 nodesLid = unique( nodes503_(:));
 
-%%
-tri2D = tri2D.computeElementMatrices(u1,u2);
 
 %% Begin time stepping
 realTime = 0;
@@ -94,7 +78,12 @@ for i = startStep:par.nRealTimesteps
     re_half=0.5/ani;
     two_inv_re=2*ani;
     
-%     while pseudoTimeSteps < par.ntime
+    while pseudoTimeSteps < 1 % par.ntime
+        pseudoTimeSteps = pseudoTimeSteps + 1;
+        fprintf('Pseudotime Step: %d\n',pseudoTimeSteps);
+        tri2D = tri2D.computeElementMatrices(u1,u2);
+        velocity = sqrt(u1.^2 + u2.^2 + 0.1E-15);
+        
         % previous values
         u10=u1;
         u20=u2;
@@ -116,13 +105,13 @@ for i = startStep:par.nRealTimesteps
         
         [Mdt,dtC,dtK,dt2Ks,dtG1,dtG2,...
          M,    C,  K, dtKs,  G1,  G2, ...
-         Mdtb2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
+         Mdtb2,G1dt,G2dt,dtP1,dtP2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
         
 %         % Step 1       
 %         deltaUstarA = -M  \(dtC+ani*dtK+.5*dt2Ks)*u1;
 %         deltaUstarB = -Mdt\(  C+ani*  K+.5* dtKs)*u1;
         
-        % CBSflow consistent
+        % Step 1 - CBSflow consistent
         invDiagMdt = full(sum(Mdt,2)).^-1;
         deltaU1 = -invDiagMdt.*(  C+ani*  K+.5* dtKs)*u1;
         deltaU2 = -invDiagMdt.*(  C+ani*  K+.5* dtKs)*u2;
@@ -135,17 +124,70 @@ for i = startStep:par.nRealTimesteps
         u1(nodesWall) = 0;
         u2(nodesWall) = 0;
         
-        % Step 2
+        % Step 2 - CBSflow consistent
         invDiagMdtbt2 = full(sum(Mdtb2,2)).^-1; % spot on
-        rhs = -K*p - (dtG1*(u1-u10) + dtG2*(u2-u20));
+        % this matrix seems to be divded by dt when it should not be - or there is a book typo - review this
+        rhs1 = - dtK*p; % spot on
+        rhs2 = -(G1*u10 + G2*u20); % spot on
+        rhs3 = -par.theta1*(G1*(u1-u10) + G2*(u2-u20)); % spot on
+        rhs = rhs1+rhs2+rhs3;
+        p = p+ invDiagMdtbt2.*rhs;
         
-        % need to debug rhs
-       
+        % Step 3 - CBSflow consistent
+        deltaU1ss = invDiagMdt.*( G1.'*p0 - 0.5*dtP1*p0);
+        deltaU2ss = invDiagMdt.*( G2.'*p0 - 0.5*dtP2*p0);       
+        u1 = u1 + deltaU1ss;
+        u2 = u2 + deltaU2ss;
         
-
-        
+        % Apply BC
+        u1(nodesLid) = 1.0;
+        u2(nodesLid) = 0;
+        u1(nodesWall) = 0;
+        u2(nodesWall) = 0;
+    end
 end
 
-% fprintf(1,'%f\n',ee(1:8))
-fprintf(1,'%E\n',rhs(1:8))
+%% Write to VTK file
+gmf.writeVTK([caseName,'.vtk']);
+fid = fopen([caseName,'.vtk'],'a+');
+fprintf(fid,'POINT_DATA %d\n',nNodes);
+fprintf(fid,'SCALARS u1 float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',u1);
+fprintf(fid,'SCALARS u2 float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',u2);
+fprintf(fid,'SCALARS p float\n');
+fprintf(fid,'LOOKUP_TABLE default\n');
+fprintf(fid,'%f\n',p);
+fclose(fid);
 
+
+    
+% % % rhs1 = G1.'*p0 - 0.5*dtP1*p0;
+% % % fprintf(1,'%E\n',rhs1(350:358))
+% % % 
+% % % % rhs2 = G2.'*p0;
+% % % % fprintf(1,'%E\n',rhs2(350:358))
+% % % 
+% % % 
+% % % fprintf(1,'%E\n',u1(350:358))
+% % % fprintf(1,'%E\n',deltaU1ss(350:358))
+% % % 
+% % % 
+% % % 
+% % % fprintf(1,'%E\n',u2(350:358))
+% % % 
+% % % 
+% % % 
+% % % % fprintf(1,'%E\n',rhs2(1:8))
+% % % % 
+% % % % fprintf(1,'%E\n',rhs(1:8))
+% % % % fprintf(1,'%E\n',deltaU1ss(1:8))
+% % % 
+% % % % fprintf(1,'%E\n',rhs(1:8))
+% % % % fprintf(1,'%f\n',invDiagMdtbt2(1:8))
+% % % % fprintf(1,'%E\n',invDiagMdtbt2(1:8).*rhs(1:8))
+% % % % fprintf(1,'%E\n',u1(1:250))
+% % % 
+% % % % (-9.5656120828973550E-010)

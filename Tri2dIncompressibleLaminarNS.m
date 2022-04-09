@@ -16,6 +16,8 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
         K % [3,3,nTri double] Diffusion stiffness matrix (inverse-density-normalized pressure diffusion, nu normalized momentum diffusion, k normalized heat diffusion)
         G1 % [3,3,nTri double] Pressure-u1 gradient matrix
         G2 % [3,3,nTri double] Pressure-u2 gradient matrix
+        P1 % [3,3,nTri double] Pressure-u1 stabilization matrix
+        P2 % [3,3,nTri double] Pressure-u2 stabilization matrix
     end
     methods
         function obj = Tri2dIncompressibleLaminarNS(gmf)
@@ -30,10 +32,11 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             if mu1~=1; error('mu1~=1'); end
             if mu2~=1; error('mu2~=1'); end
             if nu1~=nu2; error('nu1~=nu2'); end
-            obj = computeElementMatricesAreaCoordinates(obj,u1,u2);
+            % obj = computeElementMatricesAreaCoordinates(obj,u1,u2);
+            obj = computeElementMatricesGaussQuad(obj,u1,u2);
             %             % Compare results
             %             tic
-            %             gaussInt = computeElementMatricesGaussQuad(obj,u1,u2);
+%                         gaussInt = computeElementMatricesGaussQuad(obj,u1,u2);
             %             tocGauss = toc
             %             tic
             %             areaInt = computeElementMatricesAreaCoordinates(obj,u1,u2);
@@ -48,7 +51,7 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
         end
         function [Mdt,dtC,dtK,dt2Ks,dtG1,dtG2,...
                   M,    C,  K, dtKs,  G1,  G2, ...
-                  Mdtb2] = assembleGlobalMatrices(obj,deltaTimeElement,beta_)
+                  Mdtb2,G1dt,G2dt,dtP1,dtP2] = assembleGlobalMatrices(obj,deltaTimeElement,beta_)
             nTri = size(obj.nodeIDs,1);
             
             % timestep scaling
@@ -65,7 +68,12 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             dt2Ks_ = (dt.^2).*obj.Ks;
             dtG1_  = dt.*obj.G1;
             dtG2_  = dt.*obj.G1;
+            dtP1_  = dt.*obj.P1;
+            dtP2_  = dt.*obj.P2;
+            
             Mdtb2_ =(1./(dt.*beta.^2)).*obj.M;
+            G1dt_  = (1./dt).*obj.G1;
+            G2dt_  = (1./dt).*obj.G1;
             
             % 3x3 Index management
             [rowIndex3x3,colIndex3x3] = compute3x3Indices(obj);
@@ -77,6 +85,8 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             dt2Ks = sparse(rowIndex3x3,colIndex3x3,dt2Ks_(:));
             dtG1 = sparse(rowIndex3x3,colIndex3x3,dtG1_(:));
             dtG2 = sparse(rowIndex3x3,colIndex3x3,dtG2_(:));
+            dtP1 = sparse(rowIndex3x3,colIndex3x3,dtP1_(:));
+            dtP2 = sparse(rowIndex3x3,colIndex3x3,dtP2_(:));
             
             M = sparse(rowIndex3x3,colIndex3x3,obj.M(:));
             C = sparse(rowIndex3x3,colIndex3x3,obj.C(:));
@@ -86,6 +96,8 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             G2 = sparse(rowIndex3x3,colIndex3x3,obj.G2(:));
             
             Mdtb2 = sparse(rowIndex3x3,colIndex3x3,Mdtb2_(:));
+            G1dt = sparse(rowIndex3x3,colIndex3x3,G1dt_(:));
+            G2dt = sparse(rowIndex3x3,colIndex3x3,G2dt_(:));
 
         end
     end
@@ -158,6 +170,17 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             obj.G2  = w3.*obj.area.*[obj.dNpdy;
                 obj.dNpdy;
                 obj.dNpdy];
+            
+            %% Pressure Stabilization matrix (3-point integration)
+            obj.P1  = w3*obj.area.*(...
+                      (u1g1.*obj.dNpdx.'*obj.dNpdx + u2g1.*obj.dNpdy.'*obj.dNpdx) + ...
+                      (u1g2.*obj.dNpdx.'*obj.dNpdx + u2g2.*obj.dNpdy.'*obj.dNpdx) + ...
+                      (u1g3.*obj.dNpdx.'*obj.dNpdx + u2g3.*obj.dNpdy.'*obj.dNpdx) );
+            obj.P2  = w3*obj.area.*(...
+                      (u1g1.*obj.dNpdx.'*obj.dNpdy + u2g1.*obj.dNpdy.'*obj.dNpdy) + ...
+                      (u1g2.*obj.dNpdx.'*obj.dNpdy + u2g2.*obj.dNpdy.'*obj.dNpdy) + ...
+                      (u1g3.*obj.dNpdx.'*obj.dNpdy + u2g3.*obj.dNpdy.'*obj.dNpdy) );
+            
         end
         function obj = computeElementMatricesAreaCoordinates(obj,u1,u2)
             % Compute element matrices using Area coordinates
