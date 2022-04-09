@@ -60,7 +60,7 @@ nodesWall = unique( nodes500_(:));
 nodes503_ = edge.nodeIDs(edge.boundaryID==503,:);
 nodesLid = unique( nodes503_(:));
 
-
+tic
 %% Begin time stepping
 realTime = 0;
 startStep = 1;
@@ -78,9 +78,11 @@ for i = startStep:par.nRealTimesteps
     re_half=0.5/ani;
     two_inv_re=2*ani;
     
-    while pseudoTimeSteps < 1 % par.ntime
+    while pseudoTimeSteps < 2000 % par.ntime
         pseudoTimeSteps = pseudoTimeSteps + 1;
-        fprintf('Pseudotime Step: %d\n',pseudoTimeSteps);
+        if mod(pseudoTimeSteps,10)==0
+            fprintf('Pseudotime Step: %d\n',pseudoTimeSteps);
+        end
         tri2D = tri2D.computeElementMatrices(u1,u2);
         velocity = sqrt(u1.^2 + u2.^2 + 0.1E-15);
         
@@ -103,9 +105,7 @@ for i = startStep:par.nRealTimesteps
         % These two terms are equal for me
         % par.csafm*tri2D.minimumHeight.^2*re_half - (par.csafm*tri2D.minimumHeight./(maxElementVelocity+beta) )
         
-        [Mdt,dtC,dtK,dt2Ks,dtG1,dtG2,...
-         M,    C,  K, dtKs,  G1,  G2, ...
-         Mdtb2,G1dt,G2dt,dtP1,dtP2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
+        [Mdt,dtK,C,K,dtKs,G1,G2,Mdtb2,dtP1,dtP2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
         
 %         % Step 1       
 %         deltaUstarA = -M  \(dtC+ani*dtK+.5*dt2Ks)*u1;
@@ -146,6 +146,7 @@ for i = startStep:par.nRealTimesteps
         u2(nodesWall) = 0;
     end
 end
+timeStepsToc = toc
 
 %% Write to VTK file
 gmf.writeVTK([caseName,'.vtk']);
