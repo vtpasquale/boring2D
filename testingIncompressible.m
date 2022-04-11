@@ -9,7 +9,6 @@ bco = CbsBoundaryDefinition([caseName,'.bco']);
 
 %% Load mesh file and assemble
 gmf = Gmf([caseName,'.plt']);
-gmf.writeVTK([caseName,'.vtk']);
 
 tri2D = Tri2dIncompressibleLaminarNS(gmf);
 edge2D = Edge2D(gmf);
@@ -19,7 +18,7 @@ nNodes = size(gmf.nodes,1);
 %% Initial conditions
 if par.restart==1
     % Load restart file
-    var = CbsRestartFile(fullfile('ldc2d-re400','5000NUcav.var'),nNodes);
+    var = CbsRestartFile([caseName,'.var'],nNodes);
     u1 = var.u1;
     u2 = var.u2;
     p = var.p;
@@ -31,7 +30,6 @@ else
     p = par.P*ones(size(gmf.nodes,1),1);
     T = par.T*ones(size(gmf.nodes,1),1);
 end
-
 
 %% various logic and checks
 % Convection Logic
@@ -73,18 +71,33 @@ for i = startStep:par.nRealTimesteps
     end
     
     % Begin pseudo time stepping
-    pseudoTimeSteps = 0;
+    pseudoTimeStep = 0;
     minRealTimeStep=par.csafm*par.realTimestepSize;
     re_half=0.5/ani;
     two_inv_re=2*ani;
     
-    while pseudoTimeSteps < 2000 % par.ntime
-        pseudoTimeSteps = pseudoTimeSteps + 1;
-        if mod(pseudoTimeSteps,10)==0
-            fprintf('Pseudotime Step: %d\n',pseudoTimeSteps);
+    while pseudoTimeStep < 2000 % par.ntime
+        pseudoTimeStep = pseudoTimeStep + 1;
+        if mod(pseudoTimeStep,10)==0
+            fprintf('Pseudotime Step: %d\n',pseudoTimeStep);
         end
+        if mod(pseudoTimeStep,100)==0
+            figure(1)
+            loglog(1:pseudoTimeStep-2,[du1./du1(1);du2./du2(1);dp./dp(1)].')
+            legend('du1','du2','p')
+            grid on
+            drawnow()
+        end
+        
         tri2D = tri2D.computeElementMatrices(u1,u2);
         velocity = sqrt(u1.^2 + u2.^2 + 0.1E-15);
+        
+        % track changes
+        if pseudoTimeStep > 1
+            du1(pseudoTimeStep-1) = max((u10-u1).^2);
+            du2(pseudoTimeStep-1) = max((u20-u2).^2);
+            dp(pseudoTimeStep-1) = max((p0-p).^2);
+        end
         
         % previous values
         u10=u1;
@@ -102,14 +115,12 @@ for i = startStep:par.nRealTimesteps
         deltaTimeElement = min([par.csafm*tri2D.minimumHeight.^2*re_half,...
                                 par.csafm*tri2D.minimumHeight./(maxElementVelocity+beta),...
                                 minRealTimeStep*ones(nTri,1)],[],2);
-        % These two terms are equal for me
-        % par.csafm*tri2D.minimumHeight.^2*re_half - (par.csafm*tri2D.minimumHeight./(maxElementVelocity+beta) )
-        
-        [Mdt,dtK,C,K,dtKs,G1,G2,Mdtb2,dtP1,dtP2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
-        
-%         % Step 1       
-%         deltaUstarA = -M  \(dtC+ani*dtK+.5*dt2Ks)*u1;
-%         deltaUstarB = -Mdt\(  C+ani*  K+.5* dtKs)*u1;
+        % Assemble
+        if pseudoTimeStep == 1
+            [Mdt,Mdtb2,C,K,dtK,dtKs,dtP1,dtP2,G1,G2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
+        else
+            [Mdt,Mdtb2,C,K,dtK,dtKs,dtP1,dtP2] = tri2D.assembleGlobalMatrices(deltaTimeElement,beta);
+        end
         
         % Step 1 - CBSflow consistent
         invDiagMdt = full(sum(Mdt,2)).^-1;
@@ -162,33 +173,3 @@ fprintf(fid,'SCALARS p float\n');
 fprintf(fid,'LOOKUP_TABLE default\n');
 fprintf(fid,'%f\n',p);
 fclose(fid);
-
-
-    
-% % % rhs1 = G1.'*p0 - 0.5*dtP1*p0;
-% % % fprintf(1,'%E\n',rhs1(350:358))
-% % % 
-% % % % rhs2 = G2.'*p0;
-% % % % fprintf(1,'%E\n',rhs2(350:358))
-% % % 
-% % % 
-% % % fprintf(1,'%E\n',u1(350:358))
-% % % fprintf(1,'%E\n',deltaU1ss(350:358))
-% % % 
-% % % 
-% % % 
-% % % fprintf(1,'%E\n',u2(350:358))
-% % % 
-% % % 
-% % % 
-% % % % fprintf(1,'%E\n',rhs2(1:8))
-% % % % 
-% % % % fprintf(1,'%E\n',rhs(1:8))
-% % % % fprintf(1,'%E\n',deltaU1ss(1:8))
-% % % 
-% % % % fprintf(1,'%E\n',rhs(1:8))
-% % % % fprintf(1,'%f\n',invDiagMdtbt2(1:8))
-% % % % fprintf(1,'%E\n',invDiagMdtbt2(1:8).*rhs(1:8))
-% % % % fprintf(1,'%E\n',u1(1:250))
-% % % 
-% % % % (-9.5656120828973550E-010)

@@ -50,15 +50,11 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             
         end
         
-        function [Mdt,dtK,C,K,dtKs,G1,G2,Mdtb2,dtP1,dtP2]= assembleGlobalMatrices(obj,deltaTimeElement,beta_)
-%             [Mdt,dtC,dtK,dt2Ks,dtG1,dtG2,...
-%                   M,    C,  K, dtKs,  G1,  G2, ...
-%                   Mdtb2,G1dt,G2dt,dtP1,dtP2] = assembleGlobalMatrices(obj,deltaTimeElement,beta_)
-              
-              
+        function [Mdt,Mdtb2,C,K,dtK,dtKs,dtP1,dtP2,G1,G2]= assembleGlobalMatrices(obj,deltaTimeElement,beta_)
+
             nTri = size(obj.nodeIDs,1);
             
-            % timestep scaling
+            % timestep and beta scaling
             dt = zeros(1,1,nTri);
             dt(:) = deltaTimeElement;
             
@@ -66,43 +62,29 @@ classdef Tri2dIncompressibleLaminarNS < Tri2D
             beta(:) = beta_;
             
             Mdt_   = (1./dt).*obj.M;
-%             dtC_   = dt.*obj.C;
             dtK_   = dt.*obj.K;
             dtKs_ = dt.*obj.Ks;
-%             dt2Ks_ = (dt.^2).*obj.Ks;
-%             dtG1_  = dt.*obj.G1;
-%             dtG2_  = dt.*obj.G1;
             dtP1_  = dt.*obj.P1;
             dtP2_  = dt.*obj.P2;
-            
             Mdtb2_ =(1./(dt.*beta.^2)).*obj.M;
-%             G1dt_  = (1./dt).*obj.G1;
-%             G2dt_  = (1./dt).*obj.G1;
             
             % 3x3 Index management
             [rowIndex3x3,colIndex3x3] = compute3x3Indices(obj);
             
             % Assemble 3x3 element matrices
             Mdt = sparse(rowIndex3x3,colIndex3x3,Mdt_(:));
-%             dtC = sparse(rowIndex3x3,colIndex3x3,dtC_(:));
-            dtK = sparse(rowIndex3x3,colIndex3x3,dtK_(:));
-%             dt2Ks = sparse(rowIndex3x3,colIndex3x3,dt2Ks_(:));
-%             dtG1 = sparse(rowIndex3x3,colIndex3x3,dtG1_(:));
-%             dtG2 = sparse(rowIndex3x3,colIndex3x3,dtG2_(:));
-            dtP1 = sparse(rowIndex3x3,colIndex3x3,dtP1_(:));
-            dtP2 = sparse(rowIndex3x3,colIndex3x3,dtP2_(:));
-            
-%             M = sparse(rowIndex3x3,colIndex3x3,obj.M(:));
+            Mdtb2 = sparse(rowIndex3x3,colIndex3x3,Mdtb2_(:));
             C = sparse(rowIndex3x3,colIndex3x3,obj.C(:));
             K = sparse(rowIndex3x3,colIndex3x3,obj.K(:));
-            dtKs = sparse(rowIndex3x3,colIndex3x3,dtKs_(:));
-            G1 = sparse(rowIndex3x3,colIndex3x3,obj.G1(:));
-            G2 = sparse(rowIndex3x3,colIndex3x3,obj.G2(:));
+            dtK = sparse(rowIndex3x3,colIndex3x3,dtK_(:));
+            dtKs = sparse(rowIndex3x3,colIndex3x3,dtKs_(:));   
+            dtP1 = sparse(rowIndex3x3,colIndex3x3,dtP1_(:));
+            dtP2 = sparse(rowIndex3x3,colIndex3x3,dtP2_(:));
+            if nargout > 8
+                G1 = sparse(rowIndex3x3,colIndex3x3,obj.G1(:));
+                G2 = sparse(rowIndex3x3,colIndex3x3,obj.G2(:));
+            end
             
-            Mdtb2 = sparse(rowIndex3x3,colIndex3x3,Mdtb2_(:));
-%             G1dt = sparse(rowIndex3x3,colIndex3x3,G1dt_(:));
-%             G2dt = sparse(rowIndex3x3,colIndex3x3,G2dt_(:));
-
         end
     end
     methods (Access = private)

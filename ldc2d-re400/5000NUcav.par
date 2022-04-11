@@ -1,5 +1,5 @@
 Restart from prior run (0 - NO, Not even if values exist, 1 - YES, if values exist)
-1
+0
 Energy Calculation Desired (0 - NO, 1 - YES) WILL BE ENABLED IF REQUIRED, IF SET TO OFF.
 0
 Free stream values - Ux, Uy , P, T
